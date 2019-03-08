@@ -100,3 +100,18 @@ class CDABaseline(DosageBaseline):
         ]
 
         self.weights = np.array(weights)
+
+class FDBaseline(DosageBaseline):
+    """
+    Implements fixed dosage baseline.
+    Regardless of input, a fixed dosage is returned
+    for each instance in the batch.
+    """
+
+    def __init__(self, dosage):
+        self.dosage = dosage
+
+    def predict(self, X):
+        N, D = X.shape
+        Y = np.ones((N, 1))
+        return Y
