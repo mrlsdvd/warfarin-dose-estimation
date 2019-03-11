@@ -37,6 +37,7 @@ class DosageModel():
     def predict(self):
         pass
 
+
 class DosageBaseline(DosageModel):
     def __init__(self):
         pass
@@ -62,6 +63,7 @@ class DosageBaseline(DosageModel):
         if bin:
             Y = bin_predictions(Y)
         return Y
+
 
 class PDABaseline(DosageBaseline):
     """
@@ -210,3 +212,29 @@ class FDBaseline(DosageBaseline):
         N, D = X.shape
         Y = np.ones((N, 1))
         return Y
+
+
+class LinUCB(DosageModel):
+    """
+    Implements linear Upper Confidence Bound algorithm.
+
+    Arguments:
+        num_arms (int): Number of actions that can be taken (number of dosage bins)
+        num_features (int): Numner of features used for each timestep
+        alpha (float): Step size for parameter updates
+    """
+
+    def __init__(self, num_arms, num_features, alpha=0.1):
+        pass
+
+    def train(self, data, actual):
+        pass
+
+    def get_features(self, data):
+        pass
+
+    def get_targets(self, data):
+        pass
+
+    def predict(self, X):
+        pass
