@@ -37,6 +37,7 @@ class DosageModel():
     def predict(self):
         pass
 
+
 class DosageBaseline(DosageModel):
     def __init__(self):
         pass
@@ -62,6 +63,7 @@ class DosageBaseline(DosageModel):
         if bin:
             Y = bin_predictions(Y)
         return Y
+
 
 class PDABaseline(DosageBaseline):
     """
@@ -212,7 +214,7 @@ class FDBaseline(DosageBaseline):
         return Y
 
     
-class linearUCB(DosageBaseline):
+class LinearUCB(DosageBaseline):
     """
     Implements linear UCB, as seen in 
     http://john-maxwell.com/post/2017-03-17/
@@ -325,6 +327,3 @@ class linearUCB(DosageBaseline):
         
         
         
-    
-    
-    
