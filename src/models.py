@@ -210,3 +210,121 @@ class FDBaseline(DosageBaseline):
         N, D = X.shape
         Y = np.ones((N, 1))
         return Y
+
+    
+class linearUCB(DosageBaseline):
+    """
+    Implements linear UCB, as seen in 
+    http://john-maxwell.com/post/2017-03-17/
+    """
+    def __init__(self, num_arms, alpha=7):
+        col_names = [
+            "Age",
+            "Height_(cm)",
+            "Weight_(kg)",
+            "VKORC1_A/G",
+            "VKORC1_A/A",
+            "VKORC1_nan",
+            "Cyp2C9_*1/*2",
+            "Cyp2C9_*1/*3",
+            "Cyp2C9_*2/*2",
+            "Cyp2C9_*2/*3",
+            "Cyp2C9_*3/*3",
+            "Cyp2C9_nan",
+            "Race_Asian",
+            "Race_Black_or_African_American",
+            "Race_nan",
+            "enzyme_inducer_status",
+            "amiodarone_status",
+        ]
+        self.d = len(col_names)
+        self.col_names = col_names
+        self.target_name = 'Therapeutic_Dose_of_Warfarin'
+        self.num_arms = num_arms
+        self.alpha = alpha
+        
+        self.A = np.zeros((num_arms, self.d, self.d))
+        for i in range(num_arms):
+            self.A[i] = np.eye(self.d, self.d)
+        self.b = np.zeros((num_arms, self.d))
+            
+        
+    def get_features(self, data):
+        return data[self.col_names]
+    
+    def get_targets(self):
+        return data[self.target_name]
+    
+    def evaluate(self, X, target):
+        num_incorrect = 0
+        for j in range(X.shape[0]):
+            x_ta = X[j]
+            max_payoff = -float("inf")
+            best_arm = 0
+            for arm in range(self.num_arms):
+                A_inv = np.linalg.inv(self.A[arm])
+                theta = np.dot(A_inv, self.b[arm])
+                payoff = np.dot(x_ta.T, theta) + self.alpha*(np.dot(np.dot(x_ta.T, A_inv), x_ta))**0.5
+
+                if payoff > max_payoff:
+                    max_payoff = payoff
+                    best_arm = arm
+                elif payoff == max_payoff:
+                    best_arm = np.random.choice([best_arm, arm])
+            if best_arm != target[j]:
+                num_incorrect += 1
+        return float(num_incorrect)/target.shape[0]
+    
+    def train(self, X, target):
+        indices = range(X.shape[0])
+        np.random.shuffle(indices)
+        X_shuffled = X[indices]
+        target_shuffled = target[indices]
+        regret = np.zeros((target.shape[0] + 1,))
+        total_regret = 0
+        incorrect_over_time = []
+        
+        for i in range(X.shape[0]):
+            x_ta = X[i]
+            max_payoff = -float("inf")
+            best_arm = 0
+            for j in range(self.num_arms):
+                A_inv = np.linalg.inv(self.A[j])
+                theta = np.dot(A_inv, self.b[j])
+                payoff = np.dot(x_ta.T, theta) + self.alpha*(np.dot(np.dot(x_ta.T, A_inv), x_ta))**0.5
+                
+                if payoff > max_payoff:
+                    max_payoff = payoff
+                    best_arm = j
+                elif payoff == max_payoff:
+                    best_arm = np.random.choice([best_arm, j])
+                    
+            reward = 0
+            if best_arm != target[i]:
+                reward = -1
+                total_regret += 1
+            
+            regret[i+1] = total_regret
+            self.A[best_arm] += np.dot(x_ta.reshape((self.d, 1)), x_ta.T.reshape((1, self.d)))
+            self.b[best_arm] += reward*x_ta
+            
+            ## evaluate
+            if i%100 == 0:
+                incorrect_over_time.append(self.evaluate(X, target))
+
+        incorrect_over_time.append(self.evaluate(X, target))
+        return regret, incorrect_over_time
+            
+            
+            
+            
+                
+            
+                
+        
+        
+        
+        
+    
+    
+    
