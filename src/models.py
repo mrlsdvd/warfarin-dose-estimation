@@ -407,8 +407,13 @@ class Lasso(DosageBaseline):
                     if cur_val > max_val:
                         max_val = cur_val
                         max_arm = cur_arm
+<<<<<<< HEAD
 
                 self.beta_S[max_arm] = 1
+=======
+                  
+                self.beta_S[max_arm, i] = 1
+>>>>>>> 0ccb11eb74dc9b598e93ae9d6a71c0b2ccf94c2f
                 self.lambda2 = np.sqrt((np.log(i+1) + np.log(d))/(i+1))  # added 1 to t because t vals supposed to be 1 indexed
                 reward = -1
                 if target[i] == best_arm:
