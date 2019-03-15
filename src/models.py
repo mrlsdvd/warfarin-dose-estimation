@@ -213,10 +213,10 @@ class FDBaseline(DosageBaseline):
         Y = np.ones((N, 1))
         return Y
 
-    
+
 class LinearUCB(DosageBaseline):
     """
-    Implements linear UCB, as seen in 
+    Implements linear UCB, as seen in
     http://john-maxwell.com/post/2017-03-17/
     """
     def __init__(self, num_arms, alpha=7):
@@ -244,19 +244,19 @@ class LinearUCB(DosageBaseline):
         self.target_name = 'Therapeutic_Dose_of_Warfarin'
         self.num_arms = num_arms
         self.alpha = alpha
-        
+
         self.A = np.zeros((num_arms, self.d, self.d))
         for i in range(num_arms):
             self.A[i] = np.eye(self.d, self.d)
         self.b = np.zeros((num_arms, self.d))
-            
-        
+
+
     def get_features(self, data):
         return data[self.col_names]
-    
+
     def get_targets(self):
         return data[self.target_name]
-    
+
     def evaluate(self, X, target):
         num_incorrect = 0
         for j in range(X.shape[0]):
@@ -276,16 +276,16 @@ class LinearUCB(DosageBaseline):
             if best_arm != target[j]:
                 num_incorrect += 1
         return float(num_incorrect)/target.shape[0]
-    
+
     def train(self, X, target):
-        indices = range(X.shape[0])
+        indices = list(range(X.shape[0]))
         np.random.shuffle(indices)
         X_shuffled = X[indices]
         target_shuffled = target[indices]
         regret = np.zeros((target.shape[0] + 1,))
         total_regret = 0
         incorrect_over_time = []
-        
+
         for i in range(X.shape[0]):
             x_ta = X[i]
             max_payoff = -float("inf")
@@ -294,36 +294,25 @@ class LinearUCB(DosageBaseline):
                 A_inv = np.linalg.inv(self.A[j])
                 theta = np.dot(A_inv, self.b[j])
                 payoff = np.dot(x_ta.T, theta) + self.alpha*(np.dot(np.dot(x_ta.T, A_inv), x_ta))**0.5
-                
+
                 if payoff > max_payoff:
                     max_payoff = payoff
                     best_arm = j
                 elif payoff == max_payoff:
                     best_arm = np.random.choice([best_arm, j])
-                    
+
             reward = 0
             if best_arm != target[i]:
                 reward = -1
                 total_regret += 1
-            
+
             regret[i+1] = total_regret
             self.A[best_arm] += np.dot(x_ta.reshape((self.d, 1)), x_ta.T.reshape((1, self.d)))
             self.b[best_arm] += reward*x_ta
-            
+
             ## evaluate
             if i%100 == 0:
                 incorrect_over_time.append(self.evaluate(X, target))
 
         incorrect_over_time.append(self.evaluate(X, target))
         return regret, incorrect_over_time
-            
-            
-            
-            
-                
-            
-                
-        
-        
-        
-        
