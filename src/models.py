@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+from sklearn import linear_model
 from utils import bin_predictions
 
 class DosageModel():
@@ -316,7 +317,115 @@ class LinearUCB(DosageBaseline):
 
         incorrect_over_time.append(self.evaluate(X, target))
         return regret, incorrect_over_time
+     
+        
+class Lasso(DosageBaseline):
+    """
+    Implements lasso bandit, as seen in 
+    http://web.stanford.edu/~bayati/papers/lassoBandit.pdf
+    """
+    def __init__(self, num_arms, lambda1, lambda2, h, q):
+        col_names = [
+            "Age",
+            "Height_(cm)",
+            "Weight_(kg)",
+            "VKORC1_A/G",
+            "VKORC1_A/A",
+            "VKORC1_nan",
+            "Cyp2C9_*1/*2",
+            "Cyp2C9_*1/*3",
+            "Cyp2C9_*2/*2",
+            "Cyp2C9_*2/*3",
+            "Cyp2C9_*3/*3",
+            "Cyp2C9_nan",
+            "Race_Asian",
+            "Race_Black_or_African_American",
+            "Race_nan",
+            "enzyme_inducer_status",
+            "amiodarone_status",
+        ]
+        self.d = len(col_names)
+        self.col_names = col_names
+        self.target_name = 'Therapeutic_Dose_of_Warfarin'
+        self.num_arms = num_arms
+        self.lambda1 = lambda1
+        self.lambda2 = lambda2
+        self.h = h
+        self.q = q
+        self.T
+        self.S
+        self.beta_T
+        self.beta_s
             
+        
+    def get_features(self, data):
+        return data[self.col_names]
+    
+    def get_targets(self):
+        return data[self.target_name]
+    
+    def train(self, X, target):
+        n, d = X.shape
+        self.T = np.array((num_arms, n))
+        self.S = np.array((num_arms, n))
+        self.beta_T = np.zeros((num_arms, d))
+        self.beta_S = np.zeros((num_arms, d))
+        Y = np.zeros((n,))
+        
+        self.construct_forced_samples(n)
+        arm_chosen;
+        for i in range(n):
+            X_i = X[i]
+            if np.sum(T[:,i]) > 0:
+                for j in range(num_arms):
+                    if T[j,i] == 1:
+                        arm_chosen = j
+            else:
+                X_beta = np.array((num_arms,))
+                for j in range(num_arms):
+                    clf = linear_model.lasso(self.lambda1 / 2.0)
+                    clf.fit(self.beta_T[j, :i], Y[:i])
+                    self.beta_T[j] = clf.coef_
+                    X_beta = np.dot(X_i, self.beta_T[j])
+                    
+                threshold = np.max(X_beta) - h/2.0
+                
+                K = []
+                for j in range(num_arms):
+                    if X_beta[j] >= threshold:
+                        K.append(j)
+                
+                max_arm = 0
+                max_val = 0
+                for j in range(len(K)):
+                    cur_arm = K[j]
+                    clf = linear_model.lasso(self.lambda2 / 2.0)
+                    clf.fit(self.beta_S[cur_arm, :i], Y[:i])
+                    self.beta_S[cur_arm] = clf.coef_
+                    cur_val = np.dot(X_i, self.beta_S[cur_arm])
+                    
+                    if cur_val > max_val:
+                        max_val = cur_val
+                        max_arm = cur_arm
+                  
+                self.beta_S[max_arm] = 1
+                self.lambda2 = np.sqrt((np.log(i+1) + np.log(d))/(i+1))  # added 1 to t because t vals supposed to be 1 indexed
+                reward = -1
+                if target[i] == best_arm: 
+                    reward = 0
+                
+                Y[i] = reward
+                    
+                
+                
+                
+                    
+                    
+                    
+                    
+                    
+            
+                        
             
             
             
