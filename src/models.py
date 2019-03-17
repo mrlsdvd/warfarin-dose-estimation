@@ -215,7 +215,7 @@ class FDBaseline(DosageBaseline):
         return Y
 
 
-class LinearUCB(DosageBaseline):
+class LinearUCB(DosageModel):
     """
     Implements linear UCB, as seen in
     http://john-maxwell.com/post/2017-03-17/
@@ -319,7 +319,7 @@ class LinearUCB(DosageBaseline):
         return regret, incorrect_over_time
 
 
-class Lasso(DosageBaseline):
+class LassoBandit(DosageModel):
     """
     Implements lasso bandit, as seen in
     http://web.stanford.edu/~bayati/papers/lassoBandit.pdf
@@ -352,10 +352,29 @@ class Lasso(DosageBaseline):
         self.lambda2 = lambda2
         self.h = h
         self.q = q
-        self.T
-        self.S
-        self.beta_T
-        self.beta_s
+
+    def construct_forced_samples(self, N):
+        """
+        Constructs forced samples for each arm.
+        T[i, t] == 1 if arm i is forced sampled for time / sample t,
+        otherwise, T[i, t] == 0.
+
+        Arguments:
+            N (int): Total number of timesteps / samples
+        """
+        K, h, q = self.num_arms, self.h, self.q
+        for i in range(K):
+            # n = {0, 1, 2, 3, 4, ...}
+            n_idxs = np.arange(q)
+            # j = {q*i, q*i + 1, q*i + 2, ..., q*i}
+            j_idxs = np.arange(q*i, q*(i+1))
+            # sampled indices = (2^n - 1)*Kq + j
+            idxs = np.array([np.power(2, n_idxs[n])-1 for n in n_idxs])
+            idxs = idxs * (K*q) + j_idxs
+            # Remove out of bound indices
+            idxs = idxs[(idxs < N) & (idxs >= 0)]
+
+            self.T[i, idxs] = 1
 
 
     def get_features(self, data):
@@ -365,58 +384,77 @@ class Lasso(DosageBaseline):
         return data[self.target_name]
 
     def train(self, X, target):
-        n, d = X.shape
-        self.T = np.array((num_arms, n))
-        self.S = np.array((num_arms, n))
-        self.beta_T = np.zeros((num_arms, d))
-        self.beta_S = np.zeros((num_arms, d))
-        Y = np.zeros((n,))
+        N, D = X.shape
+        K, h = self.num_arms, self.h
+        lambda1, lambda2_0 = self.lambda1, self.lambda2
+        lambda2_t = lambda2_0 # lambda 2 is updated over iterations
 
-        self.construct_forced_samples(n)
-        arm_chosen;
-        for i in range(n):
-            X_i = X[i]
-            if np.sum(T[:,i]) > 0:
-                for j in range(num_arms):
-                    if T[j,i] == 1:
-                        arm_chosen = j
+        # Forced samples for each arm
+        # T[i, t] == 1 if arm i is forced sampled at time / sample t,
+        self.T = np.zeros((K, N))
+        # Free samples for each arm
+        # S[i, t] == 1 if arm i is free sampled at time / sample t,
+        self.S = np.zeros((K, N))
+        # Beta parameters for each arm under forced set T
+        self.beta_T = np.zeros((K, D))
+        # Beta parameters for each arm under free set S
+        self.beta_S = np.zeros((K, D))
+        # Targets
+        Y = np.zeros((N,))
+
+        # Define lasso estimator for forced set T on lambda 1
+        lasso_l1 = linear_model.Lasso(lambda1 / 2.0)
+
+        # Populate forced samples for each arm
+        self.construct_forced_samples(N)
+
+        for t in range(N):
+            pi_t = None; # Chosen arm / action
+            X_t = X[t]
+            # Check if current sample has been sampled by force by any arm
+            if np.sum(self.T[:,t]) > 0:
+                # Assign chosen arm for current sample pi_t, arm that forced sampled
+                pi_t = np.argmax(self.T[:, t])
             else:
-                X_beta = np.array((num_arms,))
-                for j in range(num_arms):
-                    clf = linear_model.lasso(self.lambda1 / 2.0)
-                    clf.fit(self.beta_T[j, :i], Y[:i])
-                    self.beta_T[j] = clf.coef_
-                    X_beta = np.dot(X_i, self.beta_T[j])
+                # Keep track of estimated forced rewards for each arm
+                approx_rewards_T = np.zeros((K,))
+                for i in range(K):
+                    # Get indices for forced samples of arm i up to sample t
+                    idxs = np.arange(N, dtype=np.int32)[self.T[i].astype(bool)][:t]
+                    lasso_l1.fit(X[idxs], Y[idxs])
+                    # Get fitted beta parameters
+                    self.beta_T[i] = lasso_l1.coef_
+                    approx_rewards_T[i] = np.dot(X_t, self.beta_T[i])
 
-                threshold = np.max(X_beta) - h/2.0
+                # Define reward threshold for which arm will be included in K_hat
+                reward_thresh = np.max(approx_rewards_T) - h/2.0
+                # Get arms for which approx rewards under T are >= reward thresh
+                K_hat = np.arange(K)[approx_rewards_T >= reward_thresh]
 
-                K = []
-                for j in range(num_arms):
-                    if X_beta[j] >= threshold:
-                        K.append(j)
+                pi_t = 0
+                max_reward = 0
+                for idx in range(len(K_hat)):
+                    i = K_hat[idx]
+                    # Create new lasso estimator for set S on new lambda 2
+                    lasso_l2 = linear_model.Lasso(lambda2_t / 2.0)
+                    # Get indices for free samples of arm i up to sample t
+                    idxs = np.arange(N, dtype=np.int32)[self.S[i].astype(bool)][:t]
+                    if len(idxs) > 0:
+                        lasso_l2.fit(X[idxs], Y[idxs])
+                        # Get fitted beta parameters
+                        self.beta_S[i] = lasso_l2.coef_
+                    aprrox_reward = np.dot(X_t, self.beta_S[i])
 
-                max_arm = 0
-                max_val = 0
-                for j in range(len(K)):
-                    cur_arm = K[j]
-                    clf = linear_model.lasso(self.lambda2 / 2.0)
-                    clf.fit(self.beta_S[cur_arm, :i], Y[:i])
-                    self.beta_S[cur_arm] = clf.coef_
-                    cur_val = np.dot(X_i, self.beta_S[cur_arm])
+                    if aprrox_reward > max_reward:
+                        max_reward = aprrox_reward
+                        pi_t = i
 
-                    if cur_val > max_val:
-                        max_val = cur_val
-                        max_arm = cur_arm
-<<<<<<< HEAD
-
-                self.beta_S[max_arm] = 1
-=======
-                  
-                self.beta_S[max_arm, i] = 1
->>>>>>> 0ccb11eb74dc9b598e93ae9d6a71c0b2ccf94c2f
-                self.lambda2 = np.sqrt((np.log(i+1) + np.log(d))/(i+1))  # added 1 to t because t vals supposed to be 1 indexed
-                reward = -1
-                if target[i] == best_arm:
-                    reward = 0
-
-                Y[i] = reward
+            self.S[pi_t, t] = 1 # Update total free samples
+            # Update lambda 2
+            lambda2_t = lambda2_0 * np.sqrt((np.log(t+1) + np.log(D))/(t+1))  # added 1 to t because t vals supposed to be 1 indexed
+            # Record reward of taking pi_t action
+            reward = -1
+            if target[t] == pi_t:
+                reward = 0
+            # Update targets with actual target at t
+            Y[t] = reward
