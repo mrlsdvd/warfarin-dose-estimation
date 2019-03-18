@@ -484,10 +484,8 @@ class LassoBandit(DosageModel):
                     idxs.append((np.power(2, n)-1)*(K*q) + j)
 
             idxs = np.array(idxs) - 1
-            print("j_idxs: {}".format(idxs))
             # Remove out of bound indices
             idxs = idxs[(idxs < N) & (idxs >= 0)]
-            print("Indices for arm {}: {} ".format(i, idxs))
 
             self.T[i-1, idxs] = 1
 
@@ -500,20 +498,33 @@ class LassoBandit(DosageModel):
 
     def evaluate(self, X, target):
         num_incorrect = 0
-        for j in range(X.shape[0]):
-            X_t = X[j]
-            max_payoff = -float("inf")
-            best_arm = 0
-            for arm in range(self.num_arms):
-                payoff = np.dot(X_t, self.beta_S[arm])
+        N, D = X.shape
+        K, h = self.num_arms, self.h
+        
+        for t in range(X.shape[0]):
+            X_t = X[t]
+            approx_rewards_T = np.zeros((K,))
+            for i in range(K):
+                approx_rewards_T[i] = np.dot(X_t, self.beta_T[i])
 
-                if payoff > max_payoff:
-                    max_payoff = payoff
-                    best_arm = arm
-                elif payoff == max_payoff:
-                    best_arm = np.random.choice([best_arm, arm])
-            if best_arm != target[j]:
+            # Define reward threshold for which arm will be included in K_hat
+            reward_thresh = np.max(approx_rewards_T) - h/2.0
+            # Get arms for which approx rewards under T are >= reward thresh
+            K_hat = np.arange(K)[approx_rewards_T >= reward_thresh]
+
+            pi_t = 0
+            max_reward = -float('inf')
+            for idx in range(len(K_hat)):
+                i = K_hat[idx]
+                aprrox_reward = np.dot(X_t, self.beta_S[i])
+
+                if aprrox_reward > max_reward:
+                    max_reward = aprrox_reward
+                    pi_t = i
+                
+            if pi_t != target[t]:
                 num_incorrect += 1
+        
         return float(num_incorrect)/target.shape[0]
 
     def train(self, X, target):
@@ -526,8 +537,6 @@ class LassoBandit(DosageModel):
 
         indices = list(range(X.shape[0]))
         np.random.shuffle(indices)
-        # X_shuffled = X
-        # target_shuffled = target
         X_shuffled = X[indices]
         target_shuffled = target[indices]
         regret = np.zeros((target_shuffled.shape[0] + 1,))
@@ -542,10 +551,8 @@ class LassoBandit(DosageModel):
         self.S = np.zeros((K, N))
         # Beta parameters for each arm under forced set T
         self.beta_T = np.zeros((K, D))
-#         self.beta_T = np.random.uniform(size=(K,D))
         # Beta parameters for each arm under free set S
         self.beta_S = np.zeros((K, D))
-#         self.beta_S = np.random.uniform(size=(K,D))
         # Targets
         Y = np.zeros((N,))
 
@@ -556,14 +563,16 @@ class LassoBandit(DosageModel):
         self.construct_forced_samples(N)
 
         for t in range(N):
-            # print("lambda2_{}: {}".format(t, lambda2_t))
+            ## evaluate
+            if t%100 == 0:
+                incorrect_over_time.append(self.evaluate(X_shuffled, target_shuffled))
+                
             pi_t = None; # Chosen arm / action
             X_t = X_shuffled[t]
             # Check if current sample has been sampled by force by any arm
             if np.sum(self.T[:,t]) > 0:
                 # Assign chosen arm for current sample pi_t, arm that forced sampled
                 pi_t = np.argmax(self.T[:, t])
-                print("Using forced arm {} for sample {}".format(pi_t, t))
             else:
                 # Keep track of estimated forced rewards for each arm
                 approx_rewards_T = np.zeros((K,))
@@ -592,8 +601,7 @@ class LassoBandit(DosageModel):
                         lasso_l2.fit(X_shuffled[idxs], Y[idxs])
                         # Get fitted beta parameters
                         self.beta_S[i] = lasso_l2.coef_
-                    else:
-                        print("using random init")
+
                     aprrox_reward = np.dot(X_t, self.beta_S[i])
 
                     if aprrox_reward > max_reward:
@@ -613,10 +621,6 @@ class LassoBandit(DosageModel):
 
             total_regret -= reward
             regret[t+1] = total_regret
-
-            ## evaluate
-            if t%100 == 0:
-                incorrect_over_time.append(self.evaluate(X_shuffled, target_shuffled))
 
         incorrect_over_time.append(self.evaluate(X_shuffled, target_shuffled))
         return regret, incorrect_over_time
