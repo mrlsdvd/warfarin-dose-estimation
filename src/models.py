@@ -363,18 +363,25 @@ class LassoBandit(DosageModel):
             N (int): Total number of timesteps / samples
         """
         K, h, q = self.num_arms, self.h, self.q
-        for i in range(K):
+        for i in range(1, K+1):
             # n = {0, 1, 2, 3, 4, ...}
-            n_idxs = np.arange(q)
+            n_upper = int(np.log(N)/np.log(2))
+            n_idxs = np.arange(n_upper)
             # j = {q*i, q*i + 1, q*i + 2, ..., q*i}
-            j_idxs = np.arange(q*i, q*(i+1))
+            j_idxs = np.arange(q*(i-1)+1, q*(i)+1)
             # sampled indices = (2^n - 1)*Kq + j
-            idxs = np.array([np.power(2, n_idxs[n])-1 for n in n_idxs])
-            idxs = idxs * (K*q) + j_idxs
+            idxs = []
+            for n in n_idxs:
+                for j in j_idxs:
+                    idxs.append((np.power(2, n)-1)*(K*q) + j)
+
+            idxs = np.array(idxs) - 1
+            print("j_idxs: {}".format(idxs))
             # Remove out of bound indices
             idxs = idxs[(idxs < N) & (idxs >= 0)]
+            print("Indices for arm {}: {} ".format(i, idxs))
 
-            self.T[i, idxs] = 1
+            self.T[i-1, idxs] = 1
 
 
     def get_features(self, data):
@@ -411,10 +418,10 @@ class LassoBandit(DosageModel):
 
         indices = list(range(X.shape[0]))
         np.random.shuffle(indices)
-        X_shuffled = X
-        target_shuffled = target
-        # X_shuffled = X[indices]
-        # target_shuffled = target[indices]
+        # X_shuffled = X
+        # target_shuffled = target
+        X_shuffled = X[indices]
+        target_shuffled = target[indices]
         regret = np.zeros((target_shuffled.shape[0] + 1,))
         total_regret = 0
         incorrect_over_time = []
@@ -435,18 +442,20 @@ class LassoBandit(DosageModel):
         Y = np.zeros((N,))
 
         # Define lasso estimator for forced set T on lambda 1
-        lasso_l1 = linear_model.Lasso(lambda1 / 2.0, fit_intercept=False, max_iter=5000)
+        lasso_l1 = linear_model.Lasso(lambda1 / 2.0, fit_intercept=False, max_iter=7000)
 
         # Populate forced samples for each arm
         self.construct_forced_samples(N)
 
         for t in range(N):
+            # print("lambda2_{}: {}".format(t, lambda2_t))
             pi_t = None; # Chosen arm / action
             X_t = X_shuffled[t]
             # Check if current sample has been sampled by force by any arm
             if np.sum(self.T[:,t]) > 0:
                 # Assign chosen arm for current sample pi_t, arm that forced sampled
                 pi_t = np.argmax(self.T[:, t])
+                print("Using forced arm {} for sample {}".format(pi_t, t))
             else:
                 # Keep track of estimated forced rewards for each arm
                 approx_rewards_T = np.zeros((K,))
@@ -464,11 +473,11 @@ class LassoBandit(DosageModel):
                 K_hat = np.arange(K)[approx_rewards_T >= reward_thresh]
 
                 pi_t = 0
-                max_reward = 0
+                max_reward = -float('inf')
                 for idx in range(len(K_hat)):
                     i = K_hat[idx]
                     # Create new lasso estimator for set S on new lambda 2
-                    lasso_l2 = linear_model.Lasso(lambda2_t / 2.0, fit_intercept=False, max_iter=5000)
+                    lasso_l2 = linear_model.Lasso(lambda2_t / 2.0, fit_intercept=False, max_iter=7000)
                     # Get indices for free samples of arm i up to sample t
                     idxs = np.arange(N, dtype=np.int32)[self.S[i].astype(bool)][:t]
                     if len(idxs) > 0:
