@@ -383,6 +383,24 @@ class LassoBandit(DosageModel):
     def get_targets(self):
         return data[self.target_name]
 
+    def evaluate(self, X, target):
+        num_incorrect = 0
+        for j in range(X.shape[0]):
+            X_t = X[j]
+            max_payoff = -float("inf")
+            best_arm = 0
+            for arm in range(self.num_arms):
+                payoff = np.dot(X_t, self.beta_S[arm])
+
+                if payoff > max_payoff:
+                    max_payoff = payoff
+                    best_arm = arm
+                elif payoff == max_payoff:
+                    best_arm = np.random.choice([best_arm, arm])
+            if best_arm != target[j]:
+                num_incorrect += 1
+        return float(num_incorrect)/target.shape[0]
+
     def train(self, X, target):
         N, D = X.shape
         K, h = self.num_arms, self.h
@@ -390,13 +408,13 @@ class LassoBandit(DosageModel):
         lambda2_t = lambda2_0 # lambda 2 is updated over iterations
         total_regret = 0
         regret = np.zeros((N + 1,))
-        
+
         indices = list(range(X.shape[0]))
         np.random.shuffle(indices)
-#         X_shuffled = X
-#         target_shuffled = target
-        X_shuffled = X[indices]
-        target_shuffled = target[indices]
+        X_shuffled = X
+        target_shuffled = target
+        # X_shuffled = X[indices]
+        # target_shuffled = target[indices]
         regret = np.zeros((target_shuffled.shape[0] + 1,))
         total_regret = 0
         incorrect_over_time = []
@@ -472,10 +490,16 @@ class LassoBandit(DosageModel):
             reward = -1
             if target_shuffled[t] == pi_t:
                 reward = 0
+
             # Update targets with actual target at t
             Y[t] = reward
-            
+
             total_regret -= reward
             regret[t+1] = total_regret
-        
-        return regret
+
+            ## evaluate
+            if t%100 == 0:
+                incorrect_over_time.append(self.evaluate(X_shuffled, target_shuffled))
+
+        incorrect_over_time.append(self.evaluate(X_shuffled, target_shuffled))
+        return regret, incorrect_over_time
