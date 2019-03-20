@@ -427,7 +427,7 @@ class LinearUCBNewRewards(DosageModel):
         return regret, incorrect_over_time
 
 
-class LassoBandit(DosageModel):
+class Lasso(DosageModel):
     """
     Implements lasso bandit, as seen in
     http://web.stanford.edu/~bayati/papers/lassoBandit.pdf
@@ -615,6 +615,207 @@ class LassoBandit(DosageModel):
             reward = -1
             if target_shuffled[t] == pi_t:
                 reward = 0
+
+            # Update targets with actual target at t
+            Y[t] = reward
+
+            total_regret -= reward
+            regret[t+1] = total_regret
+
+        incorrect_over_time.append(self.evaluate(X_shuffled, target_shuffled))
+        return regret, incorrect_over_time
+
+    
+class LassoNewRewards(DosageModel):
+    """
+    Implements lasso bandit, as seen in
+    http://web.stanford.edu/~bayati/papers/lassoBandit.pdf
+    """
+    def __init__(self, num_arms, lambda1, lambda2, h, q):
+        col_names = [
+            "Age",
+            "Height_(cm)",
+            "Weight_(kg)",
+            "VKORC1_A/G",
+            "VKORC1_A/A",
+            "VKORC1_nan",
+            "Cyp2C9_*1/*2",
+            "Cyp2C9_*1/*3",
+            "Cyp2C9_*2/*2",
+            "Cyp2C9_*2/*3",
+            "Cyp2C9_*3/*3",
+            "Cyp2C9_nan",
+            "Race_Asian",
+            "Race_Black_or_African_American",
+            "Race_nan",
+            "enzyme_inducer_status",
+            "amiodarone_status",
+        ]
+        self.d = len(col_names)
+        self.col_names = col_names
+        self.target_name = 'Therapeutic_Dose_of_Warfarin_binned'
+        self.num_arms = num_arms
+        self.lambda1 = lambda1
+        self.lambda2 = lambda2
+        self.h = h
+        self.q = q
+
+    def construct_forced_samples(self, N):
+        """
+        Constructs forced samples for each arm.
+        T[i, t] == 1 if arm i is forced sampled for time / sample t,
+        otherwise, T[i, t] == 0.
+
+        Arguments:
+            N (int): Total number of timesteps / samples
+        """
+        K, h, q = self.num_arms, self.h, self.q
+        for i in range(1, K+1):
+            # n = {0, 1, 2, 3, 4, ...}
+            n_upper = int(np.log(N)/np.log(2))
+            n_idxs = np.arange(n_upper)
+            # j = {q*i, q*i + 1, q*i + 2, ..., q*i}
+            j_idxs = np.arange(q*(i-1)+1, q*(i)+1)
+            # sampled indices = (2^n - 1)*Kq + j
+            idxs = []
+            for n in n_idxs:
+                for j in j_idxs:
+                    idxs.append((np.power(2, n)-1)*(K*q) + j)
+
+            idxs = np.array(idxs) - 1
+            # Remove out of bound indices
+            idxs = idxs[(idxs < N) & (idxs >= 0)]
+
+            self.T[i-1, idxs] = 1
+
+
+    def get_features(self, data):
+        return data[self.col_names]
+
+    def get_targets(self):
+        return data[self.target_name]
+
+    def evaluate(self, X, target):
+        num_incorrect = 0
+        N, D = X.shape
+        K, h = self.num_arms, self.h
+        
+        for t in range(X.shape[0]):
+            X_t = X[t]
+            approx_rewards_T = np.zeros((K,))
+            for i in range(K):
+                approx_rewards_T[i] = np.dot(X_t, self.beta_T[i])
+
+            # Define reward threshold for which arm will be included in K_hat
+            reward_thresh = np.max(approx_rewards_T) - h/2.0
+            # Get arms for which approx rewards under T are >= reward thresh
+            K_hat = np.arange(K)[approx_rewards_T >= reward_thresh]
+
+            pi_t = 0
+            max_reward = -float('inf')
+            for idx in range(len(K_hat)):
+                i = K_hat[idx]
+                aprrox_reward = np.dot(X_t, self.beta_S[i])
+
+                if aprrox_reward > max_reward:
+                    max_reward = aprrox_reward
+                    pi_t = i
+                
+            if pi_t != target[t]:
+                num_incorrect += 1
+        
+        return float(num_incorrect)/target.shape[0]
+
+    def train(self, X, target):
+        N, D = X.shape
+        K, h = self.num_arms, self.h
+        lambda1, lambda2_0 = self.lambda1, self.lambda2
+        lambda2_t = lambda2_0 # lambda 2 is updated over iterations
+        total_regret = 0
+        regret = np.zeros((N + 1,))
+
+        indices = list(range(X.shape[0]))
+        np.random.shuffle(indices)
+        X_shuffled = X[indices]
+        target_shuffled = target[indices]
+        regret = np.zeros((target_shuffled.shape[0] + 1,))
+        total_regret = 0
+        incorrect_over_time = []
+
+        # Forced samples for each arm
+        # T[i, t] == 1 if arm i is forced sampled at time / sample t,
+        self.T = np.zeros((K, N))
+        # Free samples for each arm
+        # S[i, t] == 1 if arm i is free sampled at time / sample t,
+        self.S = np.zeros((K, N))
+        # Beta parameters for each arm under forced set T
+        self.beta_T = np.zeros((K, D))
+        # Beta parameters for each arm under free set S
+        self.beta_S = np.zeros((K, D))
+        # Targets
+        Y = np.zeros((N,))
+
+        # Define lasso estimator for forced set T on lambda 1
+        lasso_l1 = linear_model.Lasso(lambda1 / 2.0, fit_intercept=False, max_iter=7000)
+
+        # Populate forced samples for each arm
+        self.construct_forced_samples(N)
+
+        for t in range(N):
+            ## evaluate
+            if t%100 == 0:
+                incorrect_over_time.append(self.evaluate(X_shuffled, target_shuffled))
+                
+            pi_t = None; # Chosen arm / action
+            X_t = X_shuffled[t]
+            # Check if current sample has been sampled by force by any arm
+            if np.sum(self.T[:,t]) > 0:
+                # Assign chosen arm for current sample pi_t, arm that forced sampled
+                pi_t = np.argmax(self.T[:, t])
+            else:
+                # Keep track of estimated forced rewards for each arm
+                approx_rewards_T = np.zeros((K,))
+                for i in range(K):
+                    # Get indices for forced samples of arm i up to sample t
+                    idxs = np.arange(N, dtype=np.int32)[self.T[i].astype(bool)][:t]
+                    lasso_l1.fit(X_shuffled[idxs], Y[idxs])
+                    # Get fitted beta parameters
+                    self.beta_T[i] = lasso_l1.coef_
+                    approx_rewards_T[i] = np.dot(X_t, self.beta_T[i])
+
+                # Define reward threshold for which arm will be included in K_hat
+                reward_thresh = np.max(approx_rewards_T) - h/2.0
+                # Get arms for which approx rewards under T are >= reward thresh
+                K_hat = np.arange(K)[approx_rewards_T >= reward_thresh]
+
+                pi_t = 0
+                max_reward = -float('inf')
+                for idx in range(len(K_hat)):
+                    i = K_hat[idx]
+                    # Create new lasso estimator for set S on new lambda 2
+                    lasso_l2 = linear_model.Lasso(lambda2_t / 2.0, fit_intercept=False, max_iter=7000)
+                    # Get indices for free samples of arm i up to sample t
+                    idxs = np.arange(N, dtype=np.int32)[self.S[i].astype(bool)][:t]
+                    if len(idxs) > 0:
+                        lasso_l2.fit(X_shuffled[idxs], Y[idxs])
+                        # Get fitted beta parameters
+                        self.beta_S[i] = lasso_l2.coef_
+
+                    aprrox_reward = np.dot(X_t, self.beta_S[i])
+
+                    if aprrox_reward > max_reward:
+                        max_reward = aprrox_reward
+                        pi_t = i
+
+            self.S[pi_t, t] = 1 # Update total free samples
+            # Update lambda 2
+            lambda2_t = lambda2_0 * np.sqrt((np.log(t+1) + np.log(D))/(t+1))  # added 1 to t because t vals supposed to be 1 indexed
+            # Record reward of taking pi_t action
+            reward = 0
+            if np.absolute(pi_t - target_shuffled[t]) == 2:
+                reward = -3
+            elif np.absolute(pi_t - target_shuffled[t]) == 1:
+                reward = -1
 
             # Update targets with actual target at t
             Y[t] = reward
