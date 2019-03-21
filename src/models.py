@@ -264,22 +264,26 @@ class LinearUCB(DosageModel):
     def get_targets(self):
         return data[self.target_name]
 
+    def evaluate_single_example(self, x_ta):
+        max_payoff = -float("inf")
+        best_arm = 0
+        for arm in range(self.num_arms):
+            A_inv = np.linalg.inv(self.A[arm])
+            theta = np.dot(A_inv, self.b[arm])
+            payoff = np.dot(x_ta.T, theta) + self.alpha*(np.dot(np.dot(x_ta.T, A_inv), x_ta))**0.5
+
+            if payoff > max_payoff:
+                max_payoff = payoff
+                best_arm = arm
+            elif payoff == max_payoff:
+                best_arm = np.random.choice([best_arm, arm])
+        return best_arm
+
     def evaluate(self, X, target):
         num_incorrect = 0
         for j in range(X.shape[0]):
             x_ta = X[j]
-            max_payoff = -float("inf")
-            best_arm = 0
-            for arm in range(self.num_arms):
-                A_inv = np.linalg.inv(self.A[arm])
-                theta = np.dot(A_inv, self.b[arm])
-                payoff = np.dot(x_ta.T, theta) + self.alpha*(np.dot(np.dot(x_ta.T, A_inv), x_ta))**0.5
-
-                if payoff > max_payoff:
-                    max_payoff = payoff
-                    best_arm = arm
-                elif payoff == max_payoff:
-                    best_arm = np.random.choice([best_arm, arm])
+            best_arm = self.evaluate_single_example(x_ta)
             if best_arm != target[j]:
                 num_incorrect += 1
         return float(num_incorrect)/target.shape[0]
@@ -420,6 +424,29 @@ class Lasso(DosageModel):
     def get_targets(self):
         return data[self.target_name]
 
+    def evaluate_single_example(self, X_t):
+        K, h = self.num_arms, self.h
+        approx_rewards_T = np.zeros((K,))
+        for i in range(K):
+            approx_rewards_T[i] = np.dot(X_t, self.beta_T[i])
+
+        # Define reward threshold for which arm will be included in K_hat
+        reward_thresh = np.max(approx_rewards_T) - h/2.0
+        # Get arms for which approx rewards under T are >= reward thresh
+        K_hat = np.arange(K)[approx_rewards_T >= reward_thresh]
+
+        pi_t = 0
+        max_reward = -float('inf')
+        for idx in range(len(K_hat)):
+            i = K_hat[idx]
+            aprrox_reward = np.dot(X_t, self.beta_S[i])
+
+            if aprrox_reward > max_reward:
+                max_reward = aprrox_reward
+                pi_t = i
+
+        return pi_t
+
     def evaluate(self, X, target):
         num_incorrect = 0
         N, D = X.shape
@@ -427,24 +454,7 @@ class Lasso(DosageModel):
         
         for t in range(X.shape[0]):
             X_t = X[t]
-            approx_rewards_T = np.zeros((K,))
-            for i in range(K):
-                approx_rewards_T[i] = np.dot(X_t, self.beta_T[i])
-
-            # Define reward threshold for which arm will be included in K_hat
-            reward_thresh = np.max(approx_rewards_T) - h/2.0
-            # Get arms for which approx rewards under T are >= reward thresh
-            K_hat = np.arange(K)[approx_rewards_T >= reward_thresh]
-
-            pi_t = 0
-            max_reward = -float('inf')
-            for idx in range(len(K_hat)):
-                i = K_hat[idx]
-                aprrox_reward = np.dot(X_t, self.beta_S[i])
-
-                if aprrox_reward > max_reward:
-                    max_reward = aprrox_reward
-                    pi_t = i
+            pi_t = self.evaluate_single_example(X_t)
                 
             if pi_t != target[t]:
                 num_incorrect += 1
@@ -569,7 +579,7 @@ class Ensemble(DosageModel):
     """
     Ensembles the three baseline & two other models together
     """
-    def __init__(self, num_arms):
+    def __init__(self, num_arms, reward_correct=0, reward_incorrect_1=-1, reward_incorrect_2=-1):
         col_names = [
             "Age",
             "Height_(cm)",
@@ -615,48 +625,48 @@ class Ensemble(DosageModel):
         self.Lasso = Lasso(num_arms=3, lambda1=0.05, lambda2=0.05, h=5, q=1)
         self.num_models = 5
 
+        self.reward_correct = reward_correct
+        self.reward_incorrect_1 = reward_incorrect_1
+        self.reward_incorrect_2 = reward_incorrect_2
+
     def get_features(self, data):
         return data[self.col_names], data[self.CDA_col_names]
 
     def get_targets(self):
         return data[self.target_name]
 
-    def evaluate(self, X, target):
+    def evaluate(self, X, X_CDA, target):
         num_incorrect = 0
         N, D = X.shape
         K = self.num_arms
         
         for t in range(X.shape[0]):
             X_t = X[t]
-            pass
-            # approx_rewards_T = np.zeros((K,))
-            # for i in range(K):
-            #     approx_rewards_T[i] = np.dot(X_t, self.beta_T[i])
+            X_t_CDA = X_CDA[t]
 
-            # # Define reward threshold for which arm will be included in K_hat
-            # reward_thresh = np.max(approx_rewards_T) - h/2.0
-            # # Get arms for which approx rewards under T are >= reward thresh
-            # K_hat = np.arange(K)[approx_rewards_T >= reward_thresh]
+            pi_t = np.zeros((self.num_models,))
+            pi_t[0] = self.FDBaseline.predict(X_t.reshape((1, X_t.shape[0])))[0]
+            pi_t[1] = self.PDABaseline.predict(X_t.reshape((1, X_t.shape[0])))[0]
+            pi_t[2] = self.CDABaseline.predict(X_t_CDA.reshape((1, X_t_CDA.shape[0])))[0]
+            pi_t[3] = self.LinearUCB.evaluate_single_example(X_t)
+            pi_t[4] = self.Lasso.evaluate_single_example(X_t)
 
-            # pi_t = 0
-            # max_reward = -float('inf')
-            # for idx in range(len(K_hat)):
-            #     i = K_hat[idx]
-            #     aprrox_reward = np.dot(X_t, self.beta_S[i])
-
-            #     if aprrox_reward > max_reward:
-            #         max_reward = aprrox_reward
-            #         pi_t = i
+            counts = np.bincount(pi_t.astype('int64'))
+            winners = list(np.argwhere(counts == np.amax(counts)))
+            best_arm = winners[0]
+            if len(winners) > 1:
+                if 1 in winners:
+                    best_arm = 1
+                else:
+                    best_arm = min(winners)
                 
-            # if pi_t != target[t]:
-            #     num_incorrect += 1
+            if best_arm != target[t]:
+                num_incorrect += 1
         
         return float(num_incorrect)/target.shape[0]
 
 
     def train(self, X, X_CDA, target):
-        print(X.shape)
-        print(X_CDA.shape)
 
         N, D = X.shape
         K = self.num_arms
@@ -670,10 +680,13 @@ class Ensemble(DosageModel):
         self.LinearUCB.setup_training(N)
         self.Lasso.setup_training(N, K)
 
+        self.total_regret = 0
+        self.regret = np.zeros((N + 1,))
+        self.incorrect_over_time = []
+
         for t in range(N):
             if t%100 == 0:
-                # pass
-                self.incorrect_over_time.append(self.evaluate(X_shuffled, target_shuffled))
+                self.incorrect_over_time.append(self.evaluate(X_shuffled, X_shuffled_CDA, target_shuffled))
                 
             X_t = X_shuffled[t]
             X_t_CDA = X_shuffled_CDA[t]
@@ -685,7 +698,6 @@ class Ensemble(DosageModel):
             pi_t[3] = self.LinearUCB.train_predict_single_example(X_t)
             pi_t[4] = self.Lasso.train_predict_single_example(X_t, t, X_shuffled)
 
-
             counts = np.bincount(pi_t.astype('int64'))
             winners = list(np.argwhere(counts == np.amax(counts)))
             best_arm = winners[0]
@@ -694,21 +706,20 @@ class Ensemble(DosageModel):
                     best_arm = 1
                 else:
                     best_arm = min(winners)
-
-            print(pi_t)
-            print(best_arm)
             
             self.LinearUCB.update_parameters(X_t, best_arm, target[t], t)
             self.Lasso.update_parameters(best_arm, target[t], t)
 
-            # pi_t[1] = 
-            # pi_t[2]
-            # pi_t[3]
-            # pi_t[4]
+            reward = self.reward_correct
+            if np.absolute(best_arm - target[t]) == 2:
+                reward = self.reward_incorrect_2
+            elif np.absolute(best_arm - target[t]) == 1:
+                reward = self.reward_incorrect_1
 
-            # self.update_parameters(pi_t, target_shuffled[t], t)
+            self.total_regret -= reward
+            self.regret[t+1] = self.total_regret
 
-        self.incorrect_over_time.append(self.evaluate(X_shuffled, target_shuffled))
+        self.incorrect_over_time.append(self.evaluate(X_shuffled, X_shuffled_CDA, target_shuffled))
         return self.regret, self.incorrect_over_time
 
 
